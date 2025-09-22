@@ -66,7 +66,14 @@ class PolarisDataset(InMemoryDataset):
 
             for line in lines:
                 smiles = line[0]
+                label = line[self.target_col]
+                if len(label) == 0:
+                    continue
+
+                y = torch.tensor(float(label), dtype=torch.float).view(-1, 1)
+
                 data = from_smiles(smiles)
+                data.y = y
                 data.ecfp = self._generate_ecfp(smiles)
                 data_list.append(data)
 
