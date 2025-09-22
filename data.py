@@ -1,6 +1,8 @@
 import csv
 
 import torch
+from rdkit import Chem
+from rdkit.Chem import AllChem
 from torch_geometric.data import Data, InMemoryDataset
 from torch_geometric.utils import from_smiles
 
@@ -17,6 +19,7 @@ class PolarisDataset(InMemoryDataset):
         self.force_reload = force_reload
 
         self.target_col = self._admet_target_to_col_mapping(task)
+        self.fpgen = AllChem.GetMorganGenerator(radius=3, fpSize=1024)
 
         super().__init__(root, force_reload=force_reload)
         self.load(self.processed_paths[0] if train else self.processed_paths[1])
@@ -49,6 +52,8 @@ class PolarisDataset(InMemoryDataset):
                 data = from_smiles(smiles)
                 data.y = y
 
+                data.ecfp = self._generate_ecfp(smiles)
+
                 data_list.append(data)
 
         self.save(data_list, self.processed_paths[0])
@@ -62,9 +67,16 @@ class PolarisDataset(InMemoryDataset):
             for line in lines:
                 smiles = line[0]
                 data = from_smiles(smiles)
+                data.ecfp = self._generate_ecfp(smiles)
                 data_list.append(data)
 
         self.save(data_list, self.processed_paths[1])
+
+    def _generate_ecfp(self, smiles):
+        mol = Chem.MolFromSmiles(smiles)
+        ecfp = self.fpgen.GetFingerprint(mol)
+
+        return torch.tensor(ecfp, dtype=torch.float32)
 
     @staticmethod
     def _admet_target_to_col_mapping(target_task: str) -> int:
