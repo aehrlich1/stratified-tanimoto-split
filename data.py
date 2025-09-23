@@ -52,7 +52,6 @@ class PolarisDataset(InMemoryDataset):
                 # Log Transform data
                 y = torch.log10(y)
                 if y.isinf():
-                    print("Log transform issues.")
                     y = torch.zeros_like(y)
 
                 data = from_smiles(smiles)
