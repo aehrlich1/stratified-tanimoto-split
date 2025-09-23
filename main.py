@@ -72,7 +72,7 @@ def main(params: dict):
     train_loop(train_dataloader, model, loss_fn, optimizer)
 
     # Evaluate the final model on the test dataset
-    test_dataloader = DataLoader(test_dataset, batch_size=params["batch_size"], shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=params["batch_size"], shuffle=False)
     test_loss = test_loop(test_dataloader, model, loss_fn)
 
     params["test_loss"] = test_loss
@@ -191,7 +191,10 @@ if __name__ == "__main__":
 
     parser.add_argument("--task", help="Task name", default="MLM")
     parser.add_argument("--batch_size", help="Batch Size", default=16)
+    parser.add_argument("--dropout", help="Batch Size", default=0.1)
     parser.add_argument("--epochs", help="Epochs", default=10)
+    parser.add_argument("--hidden_channels", help="Epochs", default=32)
+    parser.add_argument("--num_layers", help="Epochs", default=3)
     parser.add_argument("--lr", help="Learning rate", default=0.001)
     parser.add_argument("--seed", help="Seed", default=42)
     parser.add_argument("--split_method", help="Splitting method", default="scaffold")
