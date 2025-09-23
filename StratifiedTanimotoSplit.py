@@ -6,7 +6,7 @@ def jaccard_distance(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     """
     intersection = torch.sum(x * y).float()
     union = torch.sum((x + y) > 0).float()
-    return  torch.where(union == 0, torch.tensor(0.0), 1.0 - intersection / union )
+    return  torch.where(union == 0, torch.tensor(0.0), 1.0 - intersection / union ) ## 0 very close, 1 very far
 
 def fuzzy_k_medoids_from_distance(X, k, m=2, max_iter=100, random_seed = 42):
     D = torch.vmap(torch.vmap(jaccard_distance, in_dims=(None, 0)), in_dims=(0, None))(X, X)
@@ -41,7 +41,6 @@ def fuzzy_k_medoids_from_distance(X, k, m=2, max_iter=100, random_seed = 42):
         if torch.equal(new_medoids, medoid_indices):
             break
         medoid_indices = new_medoids
-
     return U, medoid_indices
 
 
@@ -83,21 +82,25 @@ class StratifiedTanimotoSplit:
         self.K = K
         ecfp_dataset = [d.ecfp for d in dataset]
         ecfp_dataset = torch.stack(ecfp_dataset)
-        self.labels, medoid_indices = fuzzy_k_medoids_from_distance(ecfp_dataset, k=K, random_seed=random_seed)
+        self.fuzzy_labels, medoid_indices = fuzzy_k_medoids_from_distance(ecfp_dataset, k=K, random_seed=random_seed)
+
 
 
     def split(self, target, smiles = None, return_average_purity=False):
-        assert target.shape[0] == self.labels.shape[0]
+        assert target.shape[0] == self.fuzzy_labels.shape[0]
         train_val_split = []
         average_purity = 0
         purity_list = []
+        similarity_list = []
         for i in range(self.K):
-            train, val, purity = sample_from_cluster_with_impurity_metric(self.labels, target, cluster_id=i,
+            train, val, purity = sample_from_cluster_with_impurity_metric(self.fuzzy_labels, target, cluster_id=i,
                                                                           n_samples=self.n_val_set)
+            intra_similarity = 1 - self.fuzzy_labels[val, i].mean()
+            similarity_list.append(intra_similarity)
             purity_list.append(purity)
             train_val_split.append((train, val))
             average_purity += purity
 
         if return_average_purity:
-            return train_val_split, average_purity / self.K, purity_list
+            return train_val_split, average_purity / self.K, purity_list, similarity_list
         return train_val_split
