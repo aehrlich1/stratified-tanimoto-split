@@ -1,50 +1,29 @@
+import itertools
+import math
+
 import torch
 
-def jaccard_distance(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+from STS_utils import fcmdd
+
+def coverage(A, B):
     """
-    Compute Jaccard distance between two binary 1D tensors.
+    Percentage of elements in A that are also in B.
+    A and B can be any iterables.
     """
-    intersection = torch.sum(x * y).float()
-    union = torch.sum((x + y) > 0).float()
-    return  torch.where(union == 0, torch.tensor(0.0), 1.0 - intersection / union ) ## 0 very close, 1 very far
-
-def fuzzy_k_medoids_from_distance(X, k, m=2, max_iter=100, random_seed = 42):
-    D = torch.vmap(torch.vmap(jaccard_distance, in_dims=(None, 0)), in_dims=(0, None))(X, X)
-    """
-    Fuzzy K-medoids clustering from a precomputed distance matrix.
-
-    D: (N, N) distance matrix (symmetric, 0 diag)
-    k: number of clusters
-    m: fuzziness parameter (>1)
-    """
-    N = D.shape[0]
-    gen = torch.Generator().manual_seed(random_seed)
-    # Initialize medoids randomly
-    medoid_indices = torch.randperm(N, generator=gen)[:k]
-
-    for _ in range(max_iter):
-        # Compute memberships U (N,k)
-        d_to_medoids = D[:, medoid_indices]  # (N,k)
-        d_to_medoids = d_to_medoids.clamp(min=1e-8)
-
-        ratio = (d_to_medoids.unsqueeze(2) / d_to_medoids.unsqueeze(1)) ** (2 / (m - 1))
-        U = 1.0 / ratio.sum(dim=2)
-
-        # Update medoids: pick the point minimizing weighted distance in each cluster
-        new_medoids = []
-        for j in range(k):
-            weights = (U[:, j] ** m)  # (N,)
-            weighted_distances = (weights.unsqueeze(0) * D).sum(dim=1)
-            new_medoids.append(torch.argmin(weighted_distances).item())
-        new_medoids = torch.tensor(new_medoids)
-
-        if torch.equal(new_medoids, medoid_indices):
-            break
-        medoid_indices = new_medoids
-    return U, medoid_indices
+    A, B = set(A), set(B)
+    if not A:
+        return float('nan')  # undefined if A is empty
+    return len(A & B) / len(A)
+def jaccard_distance(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    # a,b: (d,) boolean or {0,1}
+    a = a.bool()
+    b = b.bool()
+    inter = (a & b).sum()
+    union = (a | b).sum()
+    return 1.0 - (inter.float() / (union.float().clamp_min(1)))
 
 
-def sample_from_cluster_with_impurity_metric(U, target_values, cluster_id, n_samples=5, threshold=0.8, with_resampling=False):
+def sample_from_cluster_with_impurity_metric(U, target_values, cluster_id, n_samples=5):
     '''
         1) Extract membership of a specific cluster
     '''
@@ -64,15 +43,15 @@ def sample_from_cluster_with_impurity_metric(U, target_values, cluster_id, n_sam
     validation_set_indeces = []
     for quantile in quantiles:
         idx = torch.argmin(torch.abs(sorted_target_values - quantile)) ## argmin return the left most value since it's ordered by membership
-        validation_set_indeces.append(idx.item())
+        validation_set_indeces.append(sorted_indices[idx].item())
         ## remove the value
         sorted_target_values[idx] = float("inf")
 
-    val_set_purity = memberships[sorted_indices][validation_set_indeces].mean()
+    #val_set_purity = memberships[sorted_indices][validation_set_indeces].mean()
     training_set_indeces = torch.as_tensor(list(set(sorted_indices.tolist()) - set(validation_set_indeces)))
     validation_set_indeces = torch.as_tensor(validation_set_indeces)
     assert training_set_indeces.shape[0] + validation_set_indeces.shape[0] == memberships.shape[0]
-    return training_set_indeces, validation_set_indeces, val_set_purity
+    return training_set_indeces, validation_set_indeces
 
 class StratifiedTanimotoSplit:
 
@@ -82,8 +61,23 @@ class StratifiedTanimotoSplit:
         self.K = K
         ecfp_dataset = [d.ecfp for d in dataset]
         ecfp_dataset = torch.stack(ecfp_dataset)
-        self.fuzzy_labels, medoid_indices = fuzzy_k_medoids_from_distance(ecfp_dataset, k=K, random_seed=random_seed)
 
+        self.D = torch.vmap(torch.vmap(jaccard_distance, in_dims=(0, None)), in_dims=(None, 0))(ecfp_dataset, ecfp_dataset)
+        self.fuzzy_labels, self.medoids, self.labels, _ = fcmdd(
+            X=None,
+            n_clusters=self.K,
+            m=1.5,
+            max_iter=150,
+            tol=1e-12,
+            seed=random_seed,
+            D=self.D,
+            verbose=True,
+        )
+        '''
+            Purity: Percentage of the elements in the validation set that are taken only from the cluster itself, the higher the better
+            Intrasimilarity: Average jaccard distance between the elements of the clusters
+            Intersimilarity: Average jaccard distance between the centr
+        '''
 
 
     def split(self, target, smiles = None, return_average_purity=False):
@@ -93,14 +87,27 @@ class StratifiedTanimotoSplit:
         purity_list = []
         similarity_list = []
         for i in range(self.K):
-            train, val, purity = sample_from_cluster_with_impurity_metric(self.fuzzy_labels, target, cluster_id=i,
+            train, val = sample_from_cluster_with_impurity_metric(self.fuzzy_labels, target, cluster_id=i,
                                                                           n_samples=self.n_val_set)
-            intra_similarity = 1 - self.fuzzy_labels[val, i].mean()
-            similarity_list.append(intra_similarity)
+
+            cluster_idxs = torch.where(self.labels == i)[0].tolist()
+            purity = coverage(val.tolist(), cluster_idxs)
             purity_list.append(purity)
+            intrasimilarity = torch.triu(1 - self.D[val][:, val]).sum() / ((self.n_val_set * (self.n_val_set - 1))/2)
+            similarity_list.append(intrasimilarity)
             train_val_split.append((train, val))
             average_purity += purity
 
+
+
+
         if return_average_purity:
-            return train_val_split, average_purity / self.K, purity_list, similarity_list
+            intersimilarity = 0
+            vals = [val for train, val in train_val_split]
+            i = 0
+            for val_1, val_2 in itertools.combinations(vals, 2):
+                intersimilarity += torch.triu(1 - self.D[val_1][:, val_2]).sum() / ((self.n_val_set * (self.n_val_set - 1))/2)
+                i = i + 1
+            intersimilarity /= i
+            return train_val_split, average_purity / self.K, purity_list, similarity_list, intersimilarity
         return train_val_split
