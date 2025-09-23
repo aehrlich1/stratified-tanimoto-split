@@ -17,13 +17,15 @@ from utils import ScaffoldKFold
 
 def main(params: dict):
     torch.manual_seed(params["seed"])
+    torch.set_num_threads(1)
+
     # Load polaris dataset for a specific endpoint ("MLM", "HLM", etc.)
     # Split according to predefined Time split: -> train_dataset, test_dataset
     train_dataset = PolarisDataset(
-        root="./dataset", task=params["task"], train=True, force_reload=True
+        root="./dataset", task=params["task"], train=True, force_reload=False
     )
     test_dataset = PolarisDataset(
-        root="./dataset", task=params["task"], train=False, force_reload=True
+        root="./dataset", task=params["task"], train=False, force_reload=False
     )
 
     # Split train dataset into K-Fold Cross validation according to: {Stratified, Scaffold, STS}
@@ -32,7 +34,13 @@ def main(params: dict):
     labels = train_dataset.y.view(-1).tolist()
 
     # Initialize model and loss_fn
-    model = GINModel(hidden_channels=32, out_channels=64, num_layers=3, dropout=0.1, encoding_dim=8)
+    model = GINModel(
+        hidden_channels=params["hidden_channels"],
+        out_channels=64,
+        num_layers=params["num_layers"],
+        dropout=params["dropout"],
+        encoding_dim=8,
+    )
     loss_fn = nn.L1Loss()
     optimizer = Adam(model.parameters(), lr=params["lr"], weight_decay=1e-4)
 
@@ -114,7 +122,7 @@ def stratified_kfold_cross_validation(
     avg_final_valid_loss = 0
 
     for epoch in range(params["epochs"]):
-        print(f"Epoch {epoch + 1}\n-------------------------------")
+        # print(f"Epoch {epoch + 1}\n-------------------------------")
         valid_loss_list = []
 
         for train_idx, valid_idx in skf.split(smiles, y_binned):
@@ -133,8 +141,8 @@ def stratified_kfold_cross_validation(
 
             valid_loss_list.append(valid_loss)
 
-        print(f"Valid losses: {valid_loss_list}")
-        print(f"Average valid loss: {sum(valid_loss_list) / len(valid_loss_list)}\n")
+        # print(f"Valid losses: {valid_loss_list}")
+        # print(f"Average valid loss: {sum(valid_loss_list) / len(valid_loss_list)}\n")
 
         if epoch == params["epochs"] - 1:
             avg_final_valid_loss = sum(valid_loss_list) / len(valid_loss_list)
@@ -150,7 +158,7 @@ def scaffold_kfold_cross_validation(
     avg_final_valid_loss = 0
 
     for epoch in range(params["epochs"]):
-        print(f"Epoch {epoch + 1}\n-------------------------------")
+        # print(f"Epoch {epoch + 1}\n-------------------------------")
         valid_loss_list = []
 
         for train_idx, valid_idx in skf.split(smiles):
@@ -169,8 +177,8 @@ def scaffold_kfold_cross_validation(
 
             valid_loss_list.append(valid_loss)
 
-        print(f"Valid losses: {valid_loss_list}")
-        print(f"Average valid loss: {sum(valid_loss_list) / len(valid_loss_list)}\n")
+        # print(f"Valid losses: {valid_loss_list}")
+        # print(f"Average valid loss: {sum(valid_loss_list) / len(valid_loss_list)}\n")
 
         if epoch == params["epochs"] - 1:
             avg_final_valid_loss = sum(valid_loss_list) / len(valid_loss_list)
