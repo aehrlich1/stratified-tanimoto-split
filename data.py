@@ -49,6 +49,11 @@ class PolarisDataset(InMemoryDataset):
 
                 y = torch.tensor(float(label), dtype=torch.float).view(-1, 1)
 
+                # Log Transform data
+                y = torch.log10(y)
+                if y.isinf():
+                    y = torch.zeros_like(y)
+
                 data = from_smiles(smiles)
                 data.y = y
 

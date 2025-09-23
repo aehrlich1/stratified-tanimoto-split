@@ -46,6 +46,12 @@ class GINModel(nn.Module):
 
         return out
 
+    def reset_parameters(self):
+        self.model.reset_parameters()
+        for module in self.projection.modules():
+            if hasattr(module, "reset_parameters"):
+                module.reset_parameters()
+
 
 class CategoricalEncodingModel(nn.Module):
     def __init__(self, embedding_dim):
