@@ -8,7 +8,7 @@ def jaccard_distance(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     union = torch.sum((x + y) > 0).float()
     return  torch.where(union == 0, torch.tensor(0.0), 1.0 - intersection / union )
 
-def fuzzy_k_medoids_from_distance(X, k, m=2, max_iter=100, eps=1e-6):
+def fuzzy_k_medoids_from_distance(X, k, m=2, max_iter=100, random_seed = 42):
     D = torch.vmap(torch.vmap(jaccard_distance, in_dims=(None, 0)), in_dims=(0, None))(X, X)
     """
     Fuzzy K-medoids clustering from a precomputed distance matrix.
@@ -18,7 +18,7 @@ def fuzzy_k_medoids_from_distance(X, k, m=2, max_iter=100, eps=1e-6):
     m: fuzziness parameter (>1)
     """
     N = D.shape[0]
-    gen = torch.Generator().manual_seed(42)
+    gen = torch.Generator().manual_seed(random_seed)
     # Initialize medoids randomly
     medoid_indices = torch.randperm(N, generator=gen)[:k]
 
@@ -77,13 +77,13 @@ def sample_from_cluster_with_impurity_metric(U, target_values, cluster_id, n_sam
 
 class StratifiedTanimotoSplit:
 
-    def __init__(self, dataset, K: int = 5, split_size: int = 0.2):
+    def __init__(self, dataset, K: int = 5, split_size: int = 0.2, random_seed: int = 42):
 
         self.n_val_set = int(split_size * len(dataset))
         self.K = K
         ecfp_dataset = [d.ecfp for d in dataset]
         ecfp_dataset = torch.stack(ecfp_dataset)
-        self.labels, medoid_indices = fuzzy_k_medoids_from_distance(ecfp_dataset, k=K)
+        self.labels, medoid_indices = fuzzy_k_medoids_from_distance(ecfp_dataset, k=K, random_seed=random_seed)
 
 
     def split(self, target, smiles = None, return_average_purity=False):
