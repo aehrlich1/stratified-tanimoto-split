@@ -1,4 +1,5 @@
 dataset/processed/
+dataset/zinc/processed
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
