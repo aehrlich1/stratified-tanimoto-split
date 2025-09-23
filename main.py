@@ -12,6 +12,7 @@ from torch_geometric.loader import DataLoader
 
 from data import PolarisDataset
 from models import GINModel
+from StratifiedTanimotoSplit import StratifiedTanimotoSplit
 from utils import ScaffoldKFold
 
 
@@ -46,17 +47,17 @@ def main(params: dict):
 
     match params["split_method"]:
         case "stratified":
-            print("Performing KFold Stratification Splitting")
             avg_final_valid_loss = stratified_kfold_cross_validation(
-                params, train_dataset, smiles, labels, model, loss_fn, optimizer
+                params, train_dataset, smiles, labels, model, loss_fn
             )
         case "scaffold":
-            print("Performing KFold Scaffold Splitting")
             avg_final_valid_loss = scaffold_kfold_cross_validation(
                 params, train_dataset, smiles, None, model, loss_fn, optimizer
             )
         case "sts":
-            print("Performing KFold STS")
+            avg_final_valid_loss = sts_kfold_cross_validation(
+                params, train_dataset, smiles, labels, model, loss_fn
+            )
         case _:
             raise ValueError(f"Unknown splitting method: {params['split_method']}")
 
@@ -69,7 +70,8 @@ def main(params: dict):
 
     # Retrain the model on the entire train dataset
     train_dataloader = DataLoader(train_dataset, batch_size=params["batch_size"], shuffle=True)
-    train_loop(train_dataloader, model, loss_fn, optimizer)
+    for epoch in range(params["epochs"]):
+        train_loop(train_dataloader, model, loss_fn, optimizer)
 
     # Evaluate the final model on the test dataset
     test_dataloader = DataLoader(test_dataset, batch_size=params["batch_size"], shuffle=False)
@@ -100,52 +102,47 @@ def train_loop(dataloader, model, loss_fn, optimizer):
 
 def test_loop(dataloader, model, loss_fn):
     model.eval()
-    total_loss = 0
-    total_samples = 0
+    loss_list = []
 
     with torch.no_grad():
         for data in dataloader:
             out = model(data)
             loss = loss_fn(out, data.y)
-            total_loss += loss.item()
-            total_samples += 1
+            loss_list.append(loss.item())
 
-    return total_loss / total_samples
+    return sum(loss_list) / len(loss_list)
 
 
-def stratified_kfold_cross_validation(
-    params, train_dataset, smiles, labels, model, loss_fn, optimizer
-):
+def stratified_kfold_cross_validation(params, train_dataset, smiles, labels, model, loss_fn):
     y_binned = pd.qcut(labels, q=10, labels=False)
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=params["seed"])
 
-    avg_final_valid_loss = 0
+    per_fold_final = []
+    for train_idx, valid_idx in skf.split(smiles, y_binned):
+        # Reset the model parameters and the optimizer
+        model.reset_parameters()
+        optimizer = Adam(model.parameters(), lr=params["lr"], weight_decay=1e-4)
 
-    for epoch in range(params["epochs"]):
-        # print(f"Epoch {epoch + 1}\n-------------------------------")
-        valid_loss_list = []
+        train_fold = train_dataset[train_idx]
+        valid_fold = train_dataset[valid_idx]
 
-        for train_idx, valid_idx in skf.split(smiles, y_binned):
-            train_fold = train_dataset[train_idx]
-            valid_fold = train_dataset[valid_idx]
+        train_fold_dataloader = DataLoader(
+            train_fold, batch_size=params["batch_size"], shuffle=True
+        )
+        valid_fold_dataloader = DataLoader(
+            valid_fold, batch_size=params["batch_size"], shuffle=False
+        )
 
-            train_fold_dataloader = DataLoader(
-                train_fold, batch_size=params["batch_size"], shuffle=True
-            )
-            valid_fold_dataloader = DataLoader(
-                valid_fold, batch_size=params["batch_size"], shuffle=False
-            )
+        last_val = None
 
+        for epoch in range(params["epochs"]):
             train_loop(train_fold_dataloader, model, loss_fn, optimizer)
             valid_loss = test_loop(valid_fold_dataloader, model, loss_fn)
+            last_val = valid_loss
 
-            valid_loss_list.append(valid_loss)
+        per_fold_final.append(last_val)
 
-        # print(f"Valid losses: {valid_loss_list}")
-        # print(f"Average valid loss: {sum(valid_loss_list) / len(valid_loss_list)}\n")
-
-        if epoch == params["epochs"] - 1:
-            avg_final_valid_loss = sum(valid_loss_list) / len(valid_loss_list)
+    avg_final_valid_loss = sum(per_fold_final) / len(per_fold_final)
 
     return avg_final_valid_loss
 
@@ -155,33 +152,66 @@ def scaffold_kfold_cross_validation(
 ):
     skf = ScaffoldKFold(n_splits=5, shuffle=True, random_state=params["seed"])
 
-    avg_final_valid_loss = 0
+    per_fold_final = []
+    for train_idx, valid_idx in skf.split(smiles):
+        # Reset the model parameters and the optimizer
+        model.reset_parameters()
+        optimizer = Adam(model.parameters(), lr=params["lr"], weight_decay=1e-4)
 
-    for epoch in range(params["epochs"]):
-        # print(f"Epoch {epoch + 1}\n-------------------------------")
-        valid_loss_list = []
+        train_fold = train_dataset[train_idx]
+        valid_fold = train_dataset[valid_idx]
 
-        for train_idx, valid_idx in skf.split(smiles):
-            train_fold = train_dataset[train_idx]
-            valid_fold = train_dataset[valid_idx]
+        train_fold_dataloader = DataLoader(
+            train_fold, batch_size=params["batch_size"], shuffle=True
+        )
+        valid_fold_dataloader = DataLoader(
+            valid_fold, batch_size=params["batch_size"], shuffle=False
+        )
 
-            train_fold_dataloader = DataLoader(
-                train_fold, batch_size=params["batch_size"], shuffle=True
-            )
-            valid_fold_dataloader = DataLoader(
-                valid_fold, batch_size=params["batch_size"], shuffle=False
-            )
+        last_val = None
 
+        for epoch in range(params["epochs"]):
             train_loop(train_fold_dataloader, model, loss_fn, optimizer)
             valid_loss = test_loop(valid_fold_dataloader, model, loss_fn)
+            last_val = valid_loss
 
-            valid_loss_list.append(valid_loss)
+        per_fold_final.append(last_val)
 
-        # print(f"Valid losses: {valid_loss_list}")
-        # print(f"Average valid loss: {sum(valid_loss_list) / len(valid_loss_list)}\n")
+    avg_final_valid_loss = sum(per_fold_final) / len(per_fold_final)
 
-        if epoch == params["epochs"] - 1:
-            avg_final_valid_loss = sum(valid_loss_list) / len(valid_loss_list)
+    return avg_final_valid_loss
+
+
+def sts_kfold_cross_validation(params, train_dataset, smiles, labels, model, loss_fn):
+    labels = torch.tensor(labels)
+    skf = StratifiedTanimotoSplit(train_dataset)
+
+    per_fold_final = []
+    for train_idx, valid_idx in skf.split(target=labels, smiles=smiles):
+        # Reset the model parameters and the optimizer
+        model.reset_parameters()
+        optimizer = Adam(model.parameters(), lr=params["lr"], weight_decay=1e-4)
+
+        train_fold = train_dataset[train_idx]
+        valid_fold = train_dataset[valid_idx]
+
+        train_fold_dataloader = DataLoader(
+            train_fold, batch_size=params["batch_size"], shuffle=True
+        )
+        valid_fold_dataloader = DataLoader(
+            valid_fold, batch_size=params["batch_size"], shuffle=False
+        )
+
+        last_val = None
+
+        for epoch in range(params["epochs"]):
+            train_loop(train_fold_dataloader, model, loss_fn, optimizer)
+            valid_loss = test_loop(valid_fold_dataloader, model, loss_fn)
+            last_val = valid_loss
+
+        per_fold_final.append(last_val)
+
+    avg_final_valid_loss = sum(per_fold_final) / len(per_fold_final)
 
     return avg_final_valid_loss
 
