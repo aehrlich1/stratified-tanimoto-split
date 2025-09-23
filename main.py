@@ -12,6 +12,7 @@ from torch_geometric.loader import DataLoader
 
 from data import PolarisDataset
 from models import GINModel
+from utils import ScaffoldKFold
 
 
 def main(params: dict):
@@ -30,46 +31,31 @@ def main(params: dict):
     smiles = train_dataset.smiles
     labels = train_dataset.y.view(-1).tolist()
 
-    y_binned = pd.qcut(labels, q=10, labels=False)
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=params["seed"])
-
     # Initialize model and loss_fn
     model = GINModel(hidden_channels=32, out_channels=64, num_layers=3, dropout=0.1, encoding_dim=8)
     loss_fn = nn.L1Loss()
     optimizer = Adam(model.parameters(), lr=params["lr"], weight_decay=1e-4)
 
-    avg_final_valid_loss = 0
-
-    for epoch in range(params["epochs"]):
-        print(f"Epoch {epoch + 1}\n-------------------------------")
-        valid_loss_list = []
-
-        for train_idx, valid_idx in skf.split(smiles, y_binned):
-            train_fold = train_dataset[train_idx]
-            valid_fold = train_dataset[valid_idx]
-
-            train_fold_dataloader = DataLoader(
-                train_fold, batch_size=params["batch_size"], shuffle=True
+    match params["split_method"]:
+        case "stratified":
+            print("Performing KFold Stratification Splitting")
+            avg_final_valid_loss = stratified_kfold_cross_validation(
+                params, train_dataset, smiles, labels, model, loss_fn, optimizer
             )
-            valid_fold_dataloader = DataLoader(
-                valid_fold, batch_size=params["batch_size"], shuffle=False
+        case "scaffold":
+            print("Performing KFold Scaffold Splitting")
+            avg_final_valid_loss = scaffold_kfold_cross_validation(
+                params, train_dataset, smiles, None, model, loss_fn, optimizer
             )
-
-            train_loop(train_fold_dataloader, model, loss_fn, optimizer)
-            valid_loss = test_loop(valid_fold_dataloader, model, loss_fn)
-
-            valid_loss_list.append(valid_loss)
-
-        print(f"Valid losses: {valid_loss_list}")
-        print(f"Average valid loss: {sum(valid_loss_list) / len(valid_loss_list)}\n")
-
-        if epoch == params["epochs"] - 1:
-            avg_final_valid_loss = sum(valid_loss_list) / len(valid_loss_list)
+        case "sts":
+            print("Performing KFold STS")
+        case _:
+            raise ValueError(f"Unknown splitting method: {params['split_method']}")
 
     # Add results to params dictionary:
     params["avg_final_val_loss"] = avg_final_valid_loss
 
-    # Reset the model parametera and the optimizer
+    # Reset the model parameters and the optimizer
     model.reset_parameters()
     optimizer = Adam(model.parameters(), lr=params["lr"], weight_decay=1e-4)
 
@@ -119,6 +105,79 @@ def test_loop(dataloader, model, loss_fn):
     return total_loss / total_samples
 
 
+def stratified_kfold_cross_validation(
+    params, train_dataset, smiles, labels, model, loss_fn, optimizer
+):
+    y_binned = pd.qcut(labels, q=10, labels=False)
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=params["seed"])
+
+    avg_final_valid_loss = 0
+
+    for epoch in range(params["epochs"]):
+        print(f"Epoch {epoch + 1}\n-------------------------------")
+        valid_loss_list = []
+
+        for train_idx, valid_idx in skf.split(smiles, y_binned):
+            train_fold = train_dataset[train_idx]
+            valid_fold = train_dataset[valid_idx]
+
+            train_fold_dataloader = DataLoader(
+                train_fold, batch_size=params["batch_size"], shuffle=True
+            )
+            valid_fold_dataloader = DataLoader(
+                valid_fold, batch_size=params["batch_size"], shuffle=False
+            )
+
+            train_loop(train_fold_dataloader, model, loss_fn, optimizer)
+            valid_loss = test_loop(valid_fold_dataloader, model, loss_fn)
+
+            valid_loss_list.append(valid_loss)
+
+        print(f"Valid losses: {valid_loss_list}")
+        print(f"Average valid loss: {sum(valid_loss_list) / len(valid_loss_list)}\n")
+
+        if epoch == params["epochs"] - 1:
+            avg_final_valid_loss = sum(valid_loss_list) / len(valid_loss_list)
+
+    return avg_final_valid_loss
+
+
+def scaffold_kfold_cross_validation(
+    params, train_dataset, smiles, labels, model, loss_fn, optimizer
+):
+    skf = ScaffoldKFold(n_splits=5, shuffle=True, random_state=params["seed"])
+
+    avg_final_valid_loss = 0
+
+    for epoch in range(params["epochs"]):
+        print(f"Epoch {epoch + 1}\n-------------------------------")
+        valid_loss_list = []
+
+        for train_idx, valid_idx in skf.split(smiles):
+            train_fold = train_dataset[train_idx]
+            valid_fold = train_dataset[valid_idx]
+
+            train_fold_dataloader = DataLoader(
+                train_fold, batch_size=params["batch_size"], shuffle=True
+            )
+            valid_fold_dataloader = DataLoader(
+                valid_fold, batch_size=params["batch_size"], shuffle=False
+            )
+
+            train_loop(train_fold_dataloader, model, loss_fn, optimizer)
+            valid_loss = test_loop(valid_fold_dataloader, model, loss_fn)
+
+            valid_loss_list.append(valid_loss)
+
+        print(f"Valid losses: {valid_loss_list}")
+        print(f"Average valid loss: {sum(valid_loss_list) / len(valid_loss_list)}\n")
+
+        if epoch == params["epochs"] - 1:
+            avg_final_valid_loss = sum(valid_loss_list) / len(valid_loss_list)
+
+    return avg_final_valid_loss
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pass in the parameters.")
 
@@ -127,7 +186,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", help="Epochs", default=10)
     parser.add_argument("--lr", help="Learning rate", default=0.001)
     parser.add_argument("--seed", help="Seed", default=42)
-    parser.add_argument("--split_method", help="Splitting method", default="stratified")
+    parser.add_argument("--split_method", help="Splitting method", default="scaffold")
 
     input_args = parser.parse_args()
     input_args_dict = vars(input_args)
