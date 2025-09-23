@@ -90,12 +90,14 @@ class StratifiedTanimotoSplit:
         assert target.shape[0] == self.labels.shape[0]
         train_val_split = []
         average_purity = 0
+        purity_list = []
         for i in range(self.K):
             train, val, purity = sample_from_cluster_with_impurity_metric(self.labels, target, cluster_id=i,
                                                                           n_samples=self.n_val_set)
-
+            purity_list.append(purity)
             train_val_split.append((train, val))
             average_purity += purity
+
         if return_average_purity:
-            return train_val_split, average_purity
+            return train_val_split, average_purity / self.K, purity_list
         return train_val_split
