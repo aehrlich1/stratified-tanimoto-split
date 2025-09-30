@@ -13,7 +13,7 @@ from torch_geometric.loader import DataLoader
 from data import PolarisDataset
 from models import GINModel
 from utils import ScaffoldKFold
-
+from greedy_random_split import GreedyKFold
 
 def main(params: dict):
     torch.manual_seed(params["seed"])
@@ -57,6 +57,11 @@ def main(params: dict):
             )
         case "sts":
             print("Performing KFold STS")
+        case "greedy":
+            print("Performing Greedy Splitting")
+            avg_final_valid_loss = greedy_kfold_cross_validation(
+                params, train_dataset, smiles, labels, model, loss_fn, optimizer
+            )
         case _:
             raise ValueError(f"Unknown splitting method: {params['split_method']}")
 
@@ -185,6 +190,32 @@ def scaffold_kfold_cross_validation(
 
     return avg_final_valid_loss
 
+def greedy_kfold_cross_validation(
+    params, train_dataset, smiles, labels, model, loss_fn, optimizer
+):
+    skf = GreedyKFold(n_splits=5, random_state=params["seed"])
+    avg_final_valid_loss = 0
+    for epoch in range(params["epochs"]):
+        # print(f"Epoch {epoch + 1}\n-------------------------------")
+        valid_loss_list = []
+        for train_idx, valid_idx in skf.split(smiles, labels):
+            print(f"train_idx: {train_idx}, valid_idx: {valid_idx}")
+            train_fold = train_dataset[train_idx]
+            valid_fold = train_dataset[valid_idx]
+            train_fold_dataloader = DataLoader(
+                train_fold, batch_size=params["batch_size"], shuffle=True
+            )
+            valid_fold_dataloader = DataLoader(
+                valid_fold, batch_size=params["batch_size"], shuffle=False
+            )
+            train_loop(train_fold_dataloader, model, loss_fn, optimizer)
+            valid_loss = test_loop(valid_fold_dataloader, model, loss_fn)
+            valid_loss_list.append(valid_loss)
+        print(f"Valid losses: {valid_loss_list}")
+        print(f"Average valid loss: {sum(valid_loss_list) / len(valid_loss_list)}\n")
+        if epoch == params["epochs"] - 1:
+            avg_final_valid_loss = sum(valid_loss_list) / len(valid_loss_list)
+    return avg_final_valid_loss
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pass in the parameters.")
