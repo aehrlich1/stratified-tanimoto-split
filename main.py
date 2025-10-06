@@ -11,10 +11,11 @@ from torch.optim import Adam
 from torch_geometric.loader import DataLoader
 
 from data import PolarisDataset
+from greedy_random_split import GreedyKFold
 from models import GINModel
 from StratifiedTanimotoSplit import StratifiedTanimotoSplit
 from utils import ScaffoldKFold
-from greedy_random_split import GreedyKFold
+
 
 def main(params: dict):
     torch.manual_seed(params["seed"])
@@ -58,12 +59,11 @@ def main(params: dict):
             avg_final_valid_loss = sts_kfold_cross_validation(
                 params, train_dataset, smiles, labels, model, loss_fn
             )
-            print("Performing KFold STS")
-            
+
         case "greedy":
-            print("Performing Greedy Splitting")
             avg_final_valid_loss = greedy_kfold_cross_validation(
-                params, train_dataset, smiles, labels, model, loss_fn, optimizer)
+                params, train_dataset, smiles, labels, model, loss_fn, optimizer
+            )
 
         case _:
             raise ValueError(f"Unknown splitting method: {params['split_method']}")
@@ -222,32 +222,40 @@ def sts_kfold_cross_validation(params, train_dataset, smiles, labels, model, los
 
     return avg_final_valid_loss
 
-def greedy_kfold_cross_validation(
-    params, train_dataset, smiles, labels, model, loss_fn, optimizer
-):
+
+def greedy_kfold_cross_validation(params, train_dataset, smiles, labels, model, loss_fn, optimizer):
+    labels = torch.tensor(labels)
     skf = GreedyKFold(n_splits=5, random_state=params["seed"])
-    avg_final_valid_loss = 0
-    for epoch in range(params["epochs"]):
-        # print(f"Epoch {epoch + 1}\n-------------------------------")
-        valid_loss_list = []
-        for train_idx, valid_idx in skf.split(smiles, labels):
-            print(f"train_idx: {train_idx}, valid_idx: {valid_idx}")
-            train_fold = train_dataset[train_idx]
-            valid_fold = train_dataset[valid_idx]
-            train_fold_dataloader = DataLoader(
-                train_fold, batch_size=params["batch_size"], shuffle=True
-            )
-            valid_fold_dataloader = DataLoader(
-                valid_fold, batch_size=params["batch_size"], shuffle=False
-            )
+
+    per_fold_final = []
+    for train_idx, valid_idx in skf.split(smiles=smiles, y=labels):
+        # Reset the model parameters and the optimizer
+        model.reset_parameters()
+        optimizer = Adam(model.parameters(), lr=params["lr"], weight_decay=1e-4)
+
+        train_fold = train_dataset[train_idx]
+        valid_fold = train_dataset[valid_idx]
+
+        train_fold_dataloader = DataLoader(
+            train_fold, batch_size=params["batch_size"], shuffle=True
+        )
+        valid_fold_dataloader = DataLoader(
+            valid_fold, batch_size=params["batch_size"], shuffle=False
+        )
+
+        last_val = None
+
+        for epoch in range(params["epochs"]):
             train_loop(train_fold_dataloader, model, loss_fn, optimizer)
             valid_loss = test_loop(valid_fold_dataloader, model, loss_fn)
-            valid_loss_list.append(valid_loss)
-        print(f"Valid losses: {valid_loss_list}")
-        print(f"Average valid loss: {sum(valid_loss_list) / len(valid_loss_list)}\n")
-        if epoch == params["epochs"] - 1:
-            avg_final_valid_loss = sum(valid_loss_list) / len(valid_loss_list)
+            last_val = valid_loss
+
+        per_fold_final.append(last_val)
+
+    avg_final_valid_loss = sum(per_fold_final) / len(per_fold_final)
+
     return avg_final_valid_loss
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pass in the parameters.")
