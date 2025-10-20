@@ -1,5 +1,4 @@
 """
-multiobjective_stratified_split.py
 Prototype pipeline to split molecules into Train/Test satisfying:
   1) distribution similarity on numeric properties (Wasserstein per-column),
   2) low inter-set structural similarity (Tanimoto),
@@ -8,7 +7,7 @@ Method: cluster by structure (Butina), then greedy selection of clusters for Tes
 with multi-objective score. Increase restarts to improve solution.
 """
 """
-GreedyKFold for molecular datasets (uses RDKit)
+GreedyKFold for molecular datasets 
 
 Implements the requested pipeline:
 1) Butina clustering on ECFP4
@@ -97,8 +96,8 @@ class GreedyKFold:
         self,
         n_splits=5,
         shuffle=True,
-        est_fraction=0.2,
-        restarts=3,
+        test_fraction=0.2,
+        restarts=30,
         lambda_wass=1.0,
         lambda_inter=1.0,
         lambda_intra=1.0,
@@ -110,7 +109,7 @@ class GreedyKFold:
     ):
         self.n_splits = n_splits
         self.shuffle = shuffle
-        self.test_fraction = est_fraction
+        self.test_fraction = test_fraction
         self.restarts = restarts
         self.lambda_wass = lambda_wass
         self.lambda_inter = lambda_inter
